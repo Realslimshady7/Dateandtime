@@ -1,0 +1,53 @@
+public void processValidation(Workflow workflow) {
+    try {
+        // Step 1: Retrieve Data from ValidationControl Table
+        ValidationControl validationControl = validationControlRepository.findByControlNameAndStageIdAndValidationControlTypeId(
+                "YourControlName", 
+                workflow.getStageId(), 
+                workflow.getValidationControlTypeId()
+        ).orElseThrow(() -> createException("Validation control not found for given criteria."));
+
+        // Step 2: Retrieve Data from ValidationControlDataFeed Table
+        List<ValidationControlDataFeed> validationControlDataFeeds = validationControlDataFeedRepository.findByValidationControlId(validationControl.getValidationControlId());
+
+        // Step 3: Validate DataFeed and Retrieve validationMetaData
+        for (ValidationControlDataFeed dataFeed : validationControlDataFeeds) {
+            if (dataFeed.isActive() && dataFeed.getDataFeedId() == 1) {
+                String validationMetaData = dataFeed.getValidationMetaData();
+
+                // Step 4: Calculate Based on validationMetaData and processDate
+                if (isWithinAllowedRange(workflow.getProcessDate(), validationMetaData)) {
+                    log.info("Process date is within allowed range based on validation meta-data.");
+                    // Pass the file or perform the action as needed
+                } else {
+                    throw createException("Process date does not fall within the allowed time and day range.");
+                }
+            }
+        }
+
+    } catch (Exception e) {
+        log.error("Error processing validation: ", e);
+        updateWorkflowStatus(workflow, Constants.STAGE2_CODE_NAME, Constants.WORKFLOW_EXCEPTION);
+    }
+}
+
+private boolean isWithinAllowedRange(LocalDateTime processDate, String validationMetaData) {
+    // Assume validationMetaData is a comma-separated list of allowed days like "[2,3,4,5,6]"
+    Set<Integer> allowedDays = parseAllowedDays(validationMetaData);
+    int dayOfWeek = processDate.getDayOfWeek().getValue(); // 1=Monday, 7=Sunday
+
+    return allowedDays.contains(dayOfWeek);
+}
+
+private Set<Integer> parseAllowedDays(String validationMetaData) {
+    // Parsing logic for validationMetaData to extract allowed days
+    validationMetaData = validationMetaData.replaceAll("[\\[\\]]", ""); // Remove brackets
+    String[] daysArray = validationMetaData.split(",");
+    return Arrays.stream(daysArray)
+                 .map(Integer::parseInt)
+                 .collect(Collectors.toSet());
+}
+
+private ValidateControlException createException(String errorMessage) {
+    return new ValidateControlException(errorMessage);
+}
