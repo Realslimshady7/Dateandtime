@@ -1,0 +1,15 @@
+private boolean isWithinAllowedRange(LocalDateTime processDate, String validationMetaData) {
+    // Assume validationMetaData is a comma-separated list of allowed days like "[2,3,4,5,6]"
+    Set<Integer> allowedDays = parseAllowedDays(validationMetaData);
+    int dayOfWeek = processDate.getDayOfWeek().getValue(); // 1 = Monday, 7 = Sunday
+    return allowedDays.contains(dayOfWeek);
+}
+
+private Set<Integer> parseAllowedDays(String validationMetaData) {
+    // Parsing logic for validationMetaData to extract allowed days
+    validationMetaData = validationMetaData.replaceAll("[\\[\\]]", ""); // Remove brackets
+    String[] daysArray = validationMetaData.split(",");
+    return Arrays.stream(daysArray)
+                 .map(Integer::parseInt)
+                 .collect(Collectors.toSet());
+}
