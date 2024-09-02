@@ -1,0 +1,59 @@
+public void isProcessDateValida(Workflow workflow) {
+    try {
+        // Step 1: Retrieve Data from ValidationControl Table
+        Optional<DataFeedResult> dataResult = dataFeedResultRepository.findByReferenceNameId(workflow.getReferenceNameId());
+        ValidationControl validationControl = validationControlRepository.findByControlNameAndIsActiveAndStageId(
+            "ProcessDate", true, stageRepository.getStageByCodeNameAndIsActive(Constants.STAGE2_CODE_NAME, Boolean.TRUE).getStageId()
+        ).stream().findFirst().orElse(new ValidationControl());
+
+        // Step 2: Retrieve Data from ValidationControlDataFeed Table
+        List<ValidationControlDataFeed> validationControlDataFeeds = validationControlDataFeedRepository.findByValidationControlId(validationControl.getValidationControlId());
+        Boolean resultPassed = false;
+
+        // Step 3: Validate DataFeed and Retrieve validationMetaData
+        for (ValidationControlDataFeed dataFeed : validationControlDataFeeds) {
+            if (dataFeed.isActive() && dataFeed.getValidationControls().getValidationControlId() == validationControl.getValidationControlId()) {
+                String validationMetaData = dataFeed.getValidationMetaData();
+
+                // Step 4: Calculate Based on validationMetaData and processDate
+                if (isWithinAllowedRange(dataResult.get().getProcessDate(), validationMetaData)) {
+                    resultPassed = true;
+
+                    int dayOfWeek = dataResult.get().getProcessDate().getDayOfWeek().getValue();
+                    Long validationControlDataFeedResultId = saveValidationControlDataFeedResult(
+                        dataResult.get().getDataFeedResultId(), resultPassed, LocalDateTime.now(), dayOfWeek, validationMetaData, validationControlDataFeedId
+                    );
+                    log.info("Process date is within allowed range based on validation meta-data.");
+                } else {
+                    throw createException("Process date does not fall within the allowed time and day range.");
+                }
+            }
+        }
+    } catch (Exception e) {
+        log.error("Error processing validation: ", e);
+        updateWorkflowStatus(workflow, Constants.STAGE2_CODE_NAME, Constants.WORKFLOW_EXCEPTION);
+    }
+}
+
+public void saveValidationControlDataFeedResultException(Long validationControlDataFeedResultId, LocalDateTime exceptionDate, String exceptionType, LocalDateTime processDate, String validationMetaData) {
+    ValidationControlDataFeedExceptionResult validationControlDataFeedExceptionResult = new ValidationControlDataFeedExceptionResult();
+    validationControlDataFeedExceptionResult.setValidationControlDataFeedResultId(validationControlDataFeedResultId);
+    validationControlDataFeedExceptionResult.setExceptionDate(exceptionDate);
+    validationControlDataFeedExceptionResult.setExceptionType(exceptionType);
+    validationControlDataFeedExceptionResult.setExceptionMessage("Process Date: " + processDate + ", Validation MetaData: " + validationMetaData);  // Including process date in the exception message
+    validationControlDataFeedExceptionResult.setExceptionSource("Validation Process");
+    validationControlDataFeedExceptionResult.setExceptionSeverity("HIGH");
+    validationControlDataFeedResultExceptionRepository.save(validationControlDataFeedExceptionResult);
+}
+
+public Long saveValidationControlDataFeedResult(Long dataFeedResultId, Boolean validationResult, LocalDateTime validationDate, int dayOfWeek, String validationMetaData, Long validationControlDataFeedId) {
+    ValidationControlDataFeedResult validationControlDataFeedResult = new ValidationControlDataFeedResult();
+    validationControlDataFeedResult.setDataFeedResultId(dataFeedResultId);
+    validationControlDataFeedResult.setValidationResult(validationResult);
+    validationControlDataFeedResult.setValidationDate(validationDate);
+    validationControlDataFeedResult.setExpectedValue(validationMetaData);  // Saving the validation metadata as expected value
+    validationControlDataFeedResult.setActualValue(String.valueOf(dayOfWeek));  // Saving the calculated day of the week as actual value
+    validationControlDataFeedResult.setValidationControlDataFeedId(validationControlDataFeedId);
+    validationControlDataFeedResultRepository.save(validationControlDataFeedResult);
+    return validationControlDataFeedResult.getValidationControlDataFeedResultId();
+}
