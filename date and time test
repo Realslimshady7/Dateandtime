@@ -1,0 +1,137 @@
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.*;
+
+import java.time.LocalDateTime;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Optional;
+import java.util.Set;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+@ExtendWith(MockitoExtension.class)
+public class ValidationServiceTest {
+
+    @Mock
+    private DataFeedResultRepository dataFeedResultRepository;
+
+    @Mock
+    private ValidationControlRepository validationControlRepository;
+
+    @Mock
+    private StageRepository stageRepository;
+
+    @Mock
+    private ValidationControlDataFeedRepository validationControlDataFeedRepository;
+
+    @InjectMocks
+    private ValidationService validationService; // Assuming the service class is named ValidationService
+
+    private Workflow workflow;
+    private DataFeedResult dataFeedResult;
+    private ValidationControl validationControl;
+    private ValidationControlDataFeed validationControlDataFeed;
+
+    @BeforeEach
+    public void setUp() {
+        workflow = new Workflow();
+        workflow.setReferenceNameId("testReferenceId");
+
+        dataFeedResult = new DataFeedResult();
+        dataFeedResult.setDataFeedResultId(1L);
+        dataFeedResult.setProcessDate(LocalDateTime.of(2024, 9, 5, 0, 0)); // Thursday (Day 4)
+
+        validationControl = new ValidationControl();
+        validationControl.setValidationControlId(1L);
+
+        validationControlDataFeed = new ValidationControlDataFeed();
+        validationControlDataFeed.setValidationControlDataFeedId(1L);
+        validationControlDataFeed.setValidationMetaData("{\"dayOfWeek\":[2,3,4,5,6]}"); // Allowed: Tuesday to Saturday
+        validationControlDataFeed.setValidationControls(validationControl);
+        validationControlDataFeed.setActive(true);
+    }
+
+    @Test
+    public void testIsWithinAllowedRange_ValidDay() {
+        // Arrange
+        String validationMetaData = "{\"dayOfWeek\":[2,3,4,5,6]}"; // Days 2, 3, 4, 5, 6 (Tuesday to Saturday)
+        LocalDateTime processDate = LocalDateTime.of(2024, 9, 5, 0, 0); // Thursday (Day 4)
+
+        // Act
+        boolean result = validationService.isWithinAllowedRange(processDate, validationMetaData);
+
+        // Assert
+        assertThat(result).isTrue();
+    }
+
+    @Test
+    public void testIsWithinAllowedRange_InvalidDay() {
+        // Arrange
+        String validationMetaData = "{\"dayOfWeek\":[2,3,4,5,6]}"; // Days 2, 3, 4, 5, 6 (Tuesday to Saturday)
+        LocalDateTime processDate = LocalDateTime.of(2024, 9, 7, 0, 0); // Sunday (Day 7)
+
+        // Act
+        boolean result = validationService.isWithinAllowedRange(processDate, validationMetaData);
+
+        // Assert
+        assertThat(result).isFalse();
+    }
+
+    @Test
+    public void testParseAllowedDays() {
+        // Arrange
+        String validationMetaData = "{\"dayOfWeek\":[2,3,4,5,6]}";
+
+        // Act
+        Set<Integer> allowedDays = validationService.parseAllowedDays(validationMetaData);
+
+        // Assert
+        Set<Integer> expectedDays = new HashSet<>(Arrays.asList(2, 3, 4, 5, 6));
+        assertThat(allowedDays).isEqualTo(expectedDays);
+    }
+
+    @Test
+    public void testIsProcessDateValida_ProcessDateWithinRange() {
+        // Arrange
+        when(dataFeedResultRepository.findByReferenceNameId(workflow.getReferenceNameId())).thenReturn(Optional.of(dataFeedResult));
+        when(stageRepository.getStageByCodeNameAndIsActive(anyString(), anyBoolean())).thenReturn(new Stage());
+        when(validationControlRepository.findByControlNameAndIsActiveAndStageId(anyString(), anyBoolean(), anyLong())).thenReturn(Arrays.asList(validationControl));
+        when(validationControlDataFeedRepository.findByValidationControlId(anyLong())).thenReturn(Arrays.asList(validationControlDataFeed));
+
+        // Act
+        validationService.isProcessDateValida(workflow);
+
+        // Assert
+        ArgumentCaptor<Workflow> workflowCaptor = ArgumentCaptor.forClass(Workflow.class);
+        verify(dataFeedResultRepository, times(1)).findByReferenceNameId(workflow.getReferenceNameId());
+        verify(validationControlDataFeedRepository, times(1)).findByValidationControlId(validationControl.getValidationControlId());
+        verify(stageRepository, times(1)).getStageByCodeNameAndIsActive(Constants.STAGE2_CODE_NAME, true);
+       
+    }
+
+    @Test
+    public void testIsProcessDateValida_ProcessDateOutOfRange() {
+        // Arrange
+        dataFeedResult.setProcessDate(LocalDateTime.of(2024, 9, 8, 0, 0)); // Sunday (Day 7)
+        when(dataFeedResultRepository.findByReferenceNameId(workflow.getReferenceNameId())).thenReturn(Optional.of(dataFeedResult));
+        when(stageRepository.getStageByCodeNameAndIsActive(anyString(), anyBoolean())).thenReturn(new Stage());
+        when(validationControlRepository.findByControlNameAndIsActiveAndStageId(anyString(), anyBoolean(), anyLong())).thenReturn(Arrays.asList(validationControl));
+        when(validationControlDataFeedRepository.findByValidationControlId(anyLong())).thenReturn(Arrays.asList(validationControlDataFeed));
+
+        // Act
+        validationService.isProcessDateValida(workflow);
+
+        // Assert
+        verify(dataFeedResultRepository, times(1)).findByReferenceNameId(workflow.getReferenceNameId());
+        verify(validationControlDataFeedRepository, times(1)).findByValidationControlId(validationControl.getValidationControlId());
+        verify(stageRepository, times(1)).getStageByCodeNameAndIsActive(Constants.STAGE2_CODE_NAME, true);
+        // Verify that the workflow status is updated to exception status
+        verify(validationService, times(1)).updateWorkflowStatus(workflow, Constants.STAGE2_CODE_NAME, Constants.WORKFLOW_EXCEPTION);
+    }
+}
