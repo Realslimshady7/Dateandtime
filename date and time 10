@@ -1,6 +1,9 @@
-String dayOfWeekString = validationMetaData.replaceAll(".\"dayOfWeek\":\\[|\\].", ""); // Extract values between [ and ]
+private Set<Integer> parseAllowedDays(String validationMetaData) {
+    // Use a regular expression to extract the content inside the square brackets after "dayOfWeek":
+    String dayOfWeekString = validationMetaData.replaceAll(".\"dayOfWeek\":\\[|\\].", ""); // Extract values between [ and ]
     String[] daysArray = dayOfWeekString.split(","); // Split by comma to get each day as a string
     return Arrays.stream(daysArray)
                  .map(String::trim) // Trim any extra spaces
                  .map(Integer::parseInt) // Convert to Integer
-                 .collect(Collectors.toSet());
+                 .collect(Collectors.toSet()); // Collect into a Set of Integers
+}
