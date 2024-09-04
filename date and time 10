@@ -1,0 +1,6 @@
+String dayOfWeekString = validationMetaData.replaceAll(".\"dayOfWeek\":\\[|\\].", ""); // Extract values between [ and ]
+    String[] daysArray = dayOfWeekString.split(","); // Split by comma to get each day as a string
+    return Arrays.stream(daysArray)
+                 .map(String::trim) // Trim any extra spaces
+                 .map(Integer::parseInt) // Convert to Integer
+                 .collect(Collectors.toSet());
