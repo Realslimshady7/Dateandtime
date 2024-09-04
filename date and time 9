@@ -1,0 +1,18 @@
+private Set<Integer> parseAllowedDays(String validationMetaData) {
+    // Use a regular expression to extract the dayOfWeek values from the validationMetaData string
+    Pattern pattern = Pattern.compile("\"dayOfWeek\":\\[(.*?)\\]");
+    Matcher matcher = pattern.matcher(validationMetaData);
+
+    if (matcher.find()) {
+        // Extract the part inside the square brackets
+        String dayOfWeekString = matcher.group(1);
+        String[] daysArray = dayOfWeekString.split(","); // Split by comma to get each day as a string
+        return Arrays.stream(daysArray)
+                     .map(String::trim) // Trim any extra spaces
+                     .map(Integer::parseInt) // Convert to Integer
+                     .collect(Collectors.toSet()); // Collect into a Set of Integers
+    } else {
+        // Return an empty set if the pattern doesn't match
+        return new HashSet<>();
+    }
+}
