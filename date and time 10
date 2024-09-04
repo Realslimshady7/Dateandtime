@@ -1,8 +1,12 @@
 try {
         ObjectMapper objectMapper = new ObjectMapper();
+        
+        // Ensure that the input string is a valid JSON
         JsonNode rootNode = objectMapper.readTree(validationMetaData);
-        JsonNode dayOfWeekNode = rootNode.path("dayOfWeek");
-
+        
+        // Extract the "dayOfWeek" node
+        JsonNode dayOfWeekNode = rootNode.get("dayOfWeek");
+        
         Set<Integer> allowedDays = new HashSet<>();
         if (dayOfWeekNode.isArray()) {
             for (JsonNode day : dayOfWeekNode) {
