@@ -1,9 +1,18 @@
-private Set<Integer> parseAllowedDays(String validationMetaData) {
-    // Use a regular expression to extract the content inside the square brackets after "dayOfWeek":
-    String dayOfWeekString = validationMetaData.replaceAll(".\"dayOfWeek\":\\[|\\].", ""); // Extract values between [ and ]
-    String[] daysArray = dayOfWeekString.split(","); // Split by comma to get each day as a string
-    return Arrays.stream(daysArray)
-                 .map(String::trim) // Trim any extra spaces
-                 .map(Integer::parseInt) // Convert to Integer
-                 .collect(Collectors.toSet()); // Collect into a Set of Integers
-}
+try {
+        ObjectMapper objectMapper = new ObjectMapper();
+        JsonNode rootNode = objectMapper.readTree(validationMetaData);
+        JsonNode dayOfWeekNode = rootNode.path("dayOfWeek");
+
+        Set<Integer> allowedDays = new HashSet<>();
+        if (dayOfWeekNode.isArray()) {
+            for (JsonNode day : dayOfWeekNode) {
+                allowedDays.add(day.asInt());
+            }
+        }
+
+        return allowedDays;
+
+    } catch (Exception e) {
+        e.printStackTrace();
+        return new HashSet<>(); // Return an empty set in case of error
+    }
