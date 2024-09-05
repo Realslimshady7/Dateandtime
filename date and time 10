@@ -2,87 +2,96 @@ public void isProcessDateValid(Workflow workflow) {
     try {
         // Fetch the DataFeedResult by reference name
         Optional<DataFeedResult> dataResultOpt = dataFeedResultRepository.findByReferenceNameId(workflow.getReferenceNameId());
-        
+
         if (!dataResultOpt.isPresent()) {
+            // If DataFeedResult is not found, throw an exception and handle it
             throw new ValidateControlException("DataFeedResult not found for workflow: " + workflow.getReferenceNameId());
         }
-        
+
         DataFeedResult dataResult = dataResultOpt.get();
-        
+
         // Fetch the ValidationControl for "ProcessDate"
         ValidationControl validationControl = validationControlRepository
                 .findByControlNameAndIsActiveAndStageId(
                         "ProcessDate", true, stageRepository.getStageByCodeNameAndIsActive(Constants.STAGE2_CODE_NAME, true).getStageId())
                 .stream().findFirst().orElse(new ValidationControl());
-        
+
         // Fetch the list of ValidationControlDataFeeds
         List<ValidationControlDataFeed> validationControlDataFeeds = validationControlDataFeedRepository
                 .findByValidationControl_ValidationControlId(validationControl.getValidationControlId());
-        
+
         boolean isProcessDateValid = validationControlDataFeeds.stream()
             .filter(ValidationControlDataFeed::isActive)
             .anyMatch(dataFeed -> {
                 String validationMetaData = dataFeed.getValidationMetaData();
-                
+
                 // Check if process date falls within the allowed range
                 boolean isWithinRange = isWithinAllowedRange(dataResult.getProcessDate(), validationMetaData);
-                
+
                 if (isWithinRange) {
                     // Check if current day matches the process date's day of the week
                     int processDateDayOfWeek = dataResult.getProcessDate().getDayOfWeek().getValue();
                     int currentDayOfWeek = LocalDateTime.now().getDayOfWeek().getValue();
-                    
+
                     if (processDateDayOfWeek == currentDayOfWeek) {
+                        // Save the result when the validation passes
                         saveValidationControlDataFeedResult(
-                            dataResult.getDataFeedResultId(), 
-                            true, 
-                            LocalDateTime.now(), 
-                            validationMetaData, 
-                            String.valueOf(processDateDayOfWeek), 
+                            dataResult.getDataFeedResultId(),
+                            true,
+                            LocalDateTime.now(),
+                            validationMetaData,
+                            String.valueOf(processDateDayOfWeek),
                             dataFeed.getValidationControlDataFeedId()
                         );
                         log.info("Process date is within allowed range and matches the current day.");
                         return true;
                     } else {
                         log.warn("Process date does not match the current day of the week.");
+                        // Save the exception if the day of the week does not match
+                        saveValidationControlDataFeedResultException(
+                            dataResult.getDataFeedResultId(),
+                            LocalDateTime.now(),
+                            "Process date does not match the current day of the week.",
+                            dataResult.getProcessDate().toString(),
+                            validationMetaData,
+                            "isProcessDateValid",
+                            "HIGH"
+                        );
                     }
                 } else {
                     log.warn("Process date does not fall within the allowed range.");
+                    // Save the exception if the process date is not in the allowed range
+                    saveValidationControlDataFeedResultException(
+                        dataResult.getDataFeedResultId(),
+                        LocalDateTime.now(),
+                        "Process date does not fall within the allowed range.",
+                        dataResult.getProcessDate().toString(),
+                        validationMetaData,
+                        "isProcessDateValid",
+                        "HIGH"
+                    );
                 }
-                
+
                 return false;
             });
-        
+
+        // If validation failed, update the workflow status
         if (!isProcessDateValid) {
             updateWorkflowStatus(workflow, Constants.STAGE2_CODE_NAME, Constants.WORKFLOW_EXCEPTION);
         }
-        
+
     } catch (Exception e) {
         log.error("Error processing validation: ", e);
+        // Save the exception for any unexpected errors
+        saveValidationControlDataFeedResultException(
+            null, // dataFeedResultId might be null if an exception occurs before it's available
+            LocalDateTime.now(),
+            e.getMessage(),
+            null,
+            null,
+            "isProcessDateValid",
+            "HIGH"
+        );
         updateWorkflowStatus(workflow, Constants.STAGE2_CODE_NAME, Constants.WORKFLOW_EXCEPTION);
     }
-}
-
-private boolean isWithinAllowedRange(LocalDateTime processDate, String validationMetaData) {
-    Set<Integer> allowedDays = parseAllowedDays(validationMetaData);
-    int processDateDayOfWeek = processDate.getDayOfWeek().getValue(); // 1 = Monday, ..., 7 = Sunday
-    return allowedDays.contains(processDateDayOfWeek);
-}
-
-private Set<Integer> parseAllowedDays(String validationMetaData) {
-    try {
-        ObjectMapper objectMapper = new ObjectMapper();
-        JsonNode rootNode = objectMapper.readTree(validationMetaData);
-        JsonNode daysOfWeekNode = rootNode.get("dayOfWeek");
-        
-        if (daysOfWeekNode != null && daysOfWeekNode.isArray()) {
-            return StreamSupport.stream(daysOfWeekNode.spliterator(), false)
-                    .map(JsonNode::asInt)
-                    .collect(Collectors.toSet());
-        }
-    } catch (Exception e) {
-        log.error("Error parsing validation meta-data: ", e);
-    }
-    
-    return Collections.emptySet(); // Return an empty set if error occurs
 }
