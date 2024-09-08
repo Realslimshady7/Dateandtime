@@ -1,0 +1,46 @@
+// Method to adjust the process date if it falls on a weekend
+private LocalDate adjustWeekendDate(LocalDate processDate) {
+    DayOfWeek dayOfWeek = processDate.getDayOfWeek();
+
+    if (dayOfWeek == DayOfWeek.SATURDAY) {
+        return processDate.plusDays(2); // Move to Monday
+    } else if (dayOfWeek == DayOfWeek.SUNDAY) {
+        return processDate.plusDays(1); // Move to Monday
+    }
+
+    return processDate;
+}
+
+// Fetch the next valid business day, skipping holidays
+public LocalDate getBusinessDate(LocalDate expectedBusinessDate) {
+    return findBusinessDate(isWeekend(expectedBusinessDate));
+}
+
+private LocalDate findBusinessDate(LocalDate actualBusinessDay) {
+    List<HolidaySchedule> holidaySchedules = holidayScheduleRepository
+        .findByHolidayDateLessThanEqualOrderByHolidayDateDesc(actualBusinessDay);
+
+    for (HolidaySchedule holidaySchedule : holidaySchedules) {
+        if ((actualBusinessDay.isEqual(holidaySchedule.getHolidayDate()) && holidaySchedule.isActive()) && 
+            (holidaySchedule.isFederalHoliday() || holidaySchedule.isBankHoliday())) {
+            actualBusinessDay = actualBusinessDay.plusDays(1); // Move to the next day
+            actualBusinessDay = isWeekend(actualBusinessDay); // Adjust for weekends if needed
+        } else {
+            break;
+        }
+    }
+
+    return actualBusinessDay;
+}
+
+private LocalDate isWeekend(LocalDate actualBusinessDay) {
+    DayOfWeek dayOfWeek = actualBusinessDay.getDayOfWeek();
+
+    if (dayOfWeek == DayOfWeek.SATURDAY) {
+        return actualBusinessDay.plusDays(2); // Move to Monday
+    } else if (dayOfWeek == DayOfWeek.SUNDAY) {
+        return actualBusinessDay.plusDays(1); // Move to Monday
+    }
+
+    return actualBusinessDay;
+}
