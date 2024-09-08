@@ -1,0 +1,181 @@
+public void isProcessDateValid(Workflow workflow) {
+    try {
+        // Fetch the DataFeedResult by reference name
+        Optional<DataFeedResult> dataResultOpt = dataFeedResultRepository.findByReferenceNameId(workflow.getReferenceNameId());
+        if (!dataResultOpt.isPresent()) {
+            throw new ValidateControlException("DataFeedResult not found for workflow: " + workflow.getReferenceNameId());
+        }
+        
+        DataFeedResult dataResult = dataResultOpt.get();
+        LocalDate processDate = dataResult.getProcessDate(); // LocalDate
+        LocalDate currentDate = LocalDate.now(); // Current Date
+
+        // Check if processDate falls on a weekend or holiday, adjust accordingly
+        LocalDate expectedDate = adjustDateForWeekendAndHolidays(processDate);
+        
+        // Check if Process Date matches Current Date
+        boolean isDateMatching = expectedDate.equals(currentDate);
+
+        // Fetch the ValidationControl for "ProcessDate"
+        ValidationControl validationControl = validationControlRepository
+            .findByControlNameAndIsActiveAndStageId(
+                "ProcessDate", 
+                true, 
+                stageRepository.getStageByCodeNameAndIsActive(Constants.STAGE2_CODE_NAME, true).getStageId()
+            )
+            .stream().findFirst().orElse(new ValidationControl());
+
+        // Fetch the list of ValidationControlDataFeeds
+        List<ValidationControlDataFeed> validationControlDataFeeds = validationControlDataFeedRepository
+            .findByValidationControl_ValidationControlId(validationControl.getValidationControlId());
+
+        boolean isProcessDateValid = validationControlDataFeeds.stream()
+            .filter(ValidationControlDataFeed::isActive)
+            .anyMatch(dataFeed -> {
+                String validationMetaData = dataFeed.getValidationMetaData();
+
+                // Check if the process date is within the allowed range
+                boolean isWithinRange = isWithinAllowedRange(dataResult.getProcessDate(), validationMetaData);
+
+                if (isWithinRange) {
+                    // Case 1: Process Date matches the Current Date
+                    if (isDateMatching) {
+                        // Save only to ValidationControlDataFeedResult as the dates match
+                        saveValidationControlDataFeedResult(
+                            dataResult.getDataFeedResultId(), 
+                            true, 
+                            LocalDateTime.now(), 
+                            currentDate.toString(), 
+                            processDate.toString(), 
+                            dataFeed.getValidationControlDataFeedId()
+                        );
+                        log.info("Process date is within the allowed range and matches the current day.");
+                        return true;
+                    } 
+                    // Case 2: Process Date does not match Current Date
+                    else {
+                        // Save validation result
+                        saveValidationControlDataFeedResult(
+                            dataResult.getDataFeedResultId(), 
+                            false, 
+                            LocalDateTime.now(), 
+                            currentDate.toString(), 
+                            processDate.toString(), 
+                            dataFeed.getValidationControlDataFeedId()
+                        );
+                        // After saving the validation result, save the exception
+                        saveValidationControlDataFeedResultException(
+                            dataResult.getDataFeedResultId(),
+                            LocalDateTime.now(),
+                            "Process date does not match the current date", 
+                            processDate.toString(),
+                            validationMetaData,
+                            "ProcessDate",
+                            "HIGH"
+                        );
+                        log.warn("Process date does not match the current day.");
+                        return false;
+                    }
+                } else {
+                    log.warn("Process date does not fall within the allowed range.");
+                    return false;
+                }
+            });
+
+        // If validation failed, update the workflow status
+        if (!isProcessDateValid) {
+            updateWorkflowStatus(workflow, Constants.STAGE2_CODE_NAME, Constants.WORKFLOW_EXCEPTION);
+        }
+    } catch (Exception e) {
+        log.error("Error processing validation: ", e);
+        // Save the exception for any unexpected errors
+        saveValidationControlDataFeedResultException(
+            null, // Null because we may not have the dataFeedResultId in case of an unexpected error
+            LocalDateTime.now(),
+            e.getMessage(),
+            currentDate.toString(),
+            null, 
+            "ProcessDate",
+            "CRITICAL"
+        );
+        updateWorkflowStatus(workflow, Constants.STAGE2_CODE_NAME, Constants.WORKFLOW_EXCEPTION);
+    }
+}
+
+private LocalDate adjustDateForWeekendAndHolidays(LocalDate date) {
+    // Adjust for weekend
+    if (date.getDayOfWeek() == DayOfWeek.SATURDAY) {
+        return date.plusDays(2); // Move to Monday
+    } else if (date.getDayOfWeek() == DayOfWeek.SUNDAY) {
+        return date.plusDays(1); // Move to Monday
+    }
+    
+    // Adjust for holidays (using business calendar)
+    LocalDate adjustedDate = holidayCalendarService.getBusinessDate(date);
+    
+    return adjustedDate;
+}
+
+private void saveValidationControlDataFeedResult(Long dataFeedResultId, boolean validationResult, 
+                                                 LocalDateTime timestamp, String currentDate, 
+                                                 String processDate, Long validationControlDataFeedId) {
+    try {
+        ValidationControlDataFeedResult validationControlDataFeedResult = new ValidationControlDataFeedResult();
+        validationControlDataFeedResult.setDataFeedResultId(dataFeedResultId);  
+        validationControlDataFeedResult.setResultPassed(validationResult);  
+        validationControlDataFeedResult.setTimestamp(timestamp);
+        validationControlDataFeedResult.setProcessDate(processDate);
+        validationControlDataFeedResult.setValidationMetaData(currentDate);
+        validationControlDataFeedResult.setValidationControlDataFeedId(validationControlDataFeedId);
+
+        // Save the validation result
+        validationControlDataFeedResultRepository.save(validationControlDataFeedResult);
+
+    } catch (Exception e) {
+        log.error("Error saving validation result for DataFeedResultId: {}", dataFeedResultId, e);
+    }
+}
+
+private void saveValidationControlDataFeedResultException(Long dataFeedResultId, LocalDateTime timestamp, 
+                                                          String exceptionMessage, String processDate, 
+                                                          String validationMetaData, String processName, 
+                                                          String severityLevel) {
+    try {
+        ValidationControlDataFeedResultException exception = new ValidationControlDataFeedResultException();
+        exception.setExceptionDate(timestamp);
+        exception.setExceptionMessage(exceptionMessage);
+        exception.setExceptionSeverity(severityLevel);
+        exception.setExceptionSource(processName);
+        exception.setExceptionType("Validation");
+        exception.setValidationControlDataFeedResultId(dataFeedResultId); // Make sure this ID exists in the result table
+
+        // Save the exception record
+        validationControlDataFeedResultExceptionRepository.save(exception);
+        log.info("Validation exception saved successfully for DataFeedResultId: {}", dataFeedResultId);
+
+    } catch (Exception e) {
+        log.error("Error saving validation exception for DataFeedResultId: {}", dataFeedResultId, e);
+    }
+}
+
+private boolean isWithinAllowedRange(LocalDate processDate, String validationMetaData) {
+    Set<Integer> allowedDays = parseAllowedDays(validationMetaData);
+    int processDateDayOfWeek = processDate.getDayOfWeek().getValue(); // 1 = Monday, ..., 7 = Sunday
+    return allowedDays.contains(processDateDayOfWeek);
+}
+
+private Set<Integer> parseAllowedDays(String validationMetaData) {
+    try {
+        ObjectMapper objectMapper = new ObjectMapper();
+        JsonNode rootNode = objectMapper.readTree(validationMetaData);
+        JsonNode daysOfWeekNode = rootNode.get("daysOfWeek");
+        if (daysOfWeekNode != null && daysOfWeekNode.isArray()) {
+            return StreamSupport.stream(daysOfWeekNode.spliterator(), false)
+                                .map(JsonNode::asInt)
+                                .collect(Collectors.toSet());
+        }
+    } catch (Exception e) {
+        log.error("Error parsing validation meta-data: ", e);
+    }
+    return Collections.emptySet(); // Return an empty set if error occurs
+}
