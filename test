@@ -1,0 +1,116 @@
+import static org.mockito.Mockito.*;
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.time.LocalDate;
+import java.util.Optional;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
+
+class ProcessDateValidatorServiceTest {
+
+    @Mock
+    private DataFeedResultRepository dataFeedResultRepository;
+
+    @Mock
+    private ValidationControlRepository validationControlRepository;
+
+    @Mock
+    private ValidationControlDataFeedRepository validationControlDataFeedRepository;
+
+    @Mock
+    private HolidayCalendarService holidayCalendarService;
+
+    @Mock
+    private StageRepository stageRepository;
+
+    @InjectMocks
+    private ProcessDateValidatorService processDateValidatorService;
+
+    private Workflow workflow;
+    private DataFeedResult dataFeedResult;
+    private ValidationControl validationControl;
+    private ValidationControlDataFeed validationControlDataFeed;
+
+    @BeforeEach
+    void setUp() {
+        MockitoAnnotations.openMocks(this);
+
+        // Initialize mock data
+        workflow = new Workflow();
+        workflow.setReferenceNameId("ref-123");
+
+        dataFeedResult = new DataFeedResult();
+        dataFeedResult.setProcessDate(LocalDate.of(2023, 9, 5).atStartOfDay());
+
+        validationControl = new ValidationControl();
+        validationControl.setValidationControlId(1L);
+
+        validationControlDataFeed = new ValidationControlDataFeed();
+        validationControlDataFeed.setValidationControl(validationControl);
+        validationControlDataFeed.setActive(true);
+        validationControlDataFeed.setValidationMetaData("1,2,3,4,5");
+    }
+
+    @Test
+    void testProcessDateValidWithinRangeAndMatching() {
+        // Mock repositories and services
+        when(dataFeedResultRepository.findByReferenceNameId(workflow.getReferenceNameId())).thenReturn(Optional.of(dataFeedResult));
+        when(holidayCalendarService.getBusinessDate(any())).thenReturn(LocalDate.of(2023, 9, 5));
+        when(validationControlRepository.findByControlNameAndIsActiveAndStageId(anyString(), anyBoolean(), anyLong())).thenReturn(Optional.of(validationControl));
+        when(validationControlDataFeedRepository.findByValidationControl_ValidationControlId(anyLong())).thenReturn(List.of(validationControlDataFeed));
+
+        // Call the method
+        boolean result = processDateValidatorService.isProcessDateValid(workflow);
+
+        // Assertions
+        assertTrue(result, "Process date should be valid and matching");
+    }
+
+    @Test
+    void testProcessDateNotMatching() {
+        // Mock repositories and services
+        when(dataFeedResultRepository.findByReferenceNameId(workflow.getReferenceNameId())).thenReturn(Optional.of(dataFeedResult));
+        when(holidayCalendarService.getBusinessDate(any())).thenReturn(LocalDate.of(2023, 9, 6)); // Different expected date
+        when(validationControlRepository.findByControlNameAndIsActiveAndStageId(anyString(), anyBoolean(), anyLong())).thenReturn(Optional.of(validationControl));
+        when(validationControlDataFeedRepository.findByValidationControl_ValidationControlId(anyLong())).thenReturn(List.of(validationControlDataFeed));
+
+        // Call the method
+        boolean result = processDateValidatorService.isProcessDateValid(workflow);
+
+        // Assertions
+        assertFalse(result, "Process date should not match the expected date");
+    }
+
+    @Test
+    void testProcessDateNotWithinAllowedRange() {
+        // Mock repositories and services
+        when(dataFeedResultRepository.findByReferenceNameId(workflow.getReferenceNameId())).thenReturn(Optional.of(dataFeedResult));
+        when(holidayCalendarService.getBusinessDate(any())).thenReturn(LocalDate.of(2023, 9, 5)); // Expected date matches
+        when(validationControlRepository.findByControlNameAndIsActiveAndStageId(anyString(), anyBoolean(), anyLong())).thenReturn(Optional.of(validationControl));
+        
+        // Mock validation control with a different allowed range
+        validationControlDataFeed.setValidationMetaData("6,7"); // Different allowed days
+        when(validationControlDataFeedRepository.findByValidationControl_ValidationControlId(anyLong())).thenReturn(List.of(validationControlDataFeed));
+
+        // Call the method
+        boolean result = processDateValidatorService.isProcessDateValid(workflow);
+
+        // Assertions
+        assertFalse(result, "Process date should not be within the allowed range");
+    }
+
+    @Test
+    void testDataFeedResultNotFound() {
+        // Mock data feed result not found
+        when(dataFeedResultRepository.findByReferenceNameId(workflow.getReferenceNameId())).thenReturn(Optional.empty());
+
+        // Assert exception is thrown
+        assertThrows(ValidateControlException.class, () -> {
+            processDateValidatorService.isProcessDateValid(workflow);
+        }, "Expected exception when data feed result is not found");
+    }
+}
