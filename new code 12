@@ -1,0 +1,119 @@
+public class ProcessDateValidatorService extends AbstractValidatorService {
+
+    private final DataFeedResultRepository dataFeedResultRepository;
+    private final ValidationControlRepository validationControlRepository;
+    private final ValidationControlDataFeedRepository validationControlDataFeedRepository;
+    private final StageRepository stageRepository;
+    private final HolidayCalendarService holidayCalendarService;
+
+    public ProcessDateValidatorService(
+            DataFeedResultRepository dataFeedResultRepository,
+            ValidationControlRepository validationControlRepository,
+            ValidationControlDataFeedRepository validationControlDataFeedRepository,
+            ValidationControlDataFeedResultRepository validationControlDataFeedResultRepository,
+            ValidationControlDataFeedExceptionResultRepository validationControlDataFeedExceptionResultRepository,
+            StageRepository stageRepository, 
+            HolidayCalendarService holidayCalendarService) {
+        super(validationControlDataFeedResultRepository, validationControlDataFeedExceptionResultRepository);
+        this.dataFeedResultRepository = dataFeedResultRepository;
+        this.validationControlRepository = validationControlRepository;
+        this.validationControlDataFeedRepository = validationControlDataFeedRepository;
+        this.stageRepository = stageRepository;
+        this.holidayCalendarService = holidayCalendarService;
+    }
+
+    public void validate(ValidationControlDataFeed validationControlDataFeed, Workflow workflow) {
+        try {
+            // Fetch DataFeedResult by reference name
+            DataFeedResult dataResult = getDataFeedResult(workflow);
+
+            // Dates
+            LocalDate processDate = dataResult.getProcessDate().toLocalDate();
+            LocalDate currentDate = LocalDate.now();
+            LocalDate expectedDate = adjustDateForWeekendAndHolidays(currentDate);
+
+            // Process date validation
+            boolean isProcessDateValid = validateProcessDate(validationControlDataFeed, workflow, processDate, expectedDate);
+            if (!isProcessDateValid) {
+                terminateWorkflow(validationControlDataFeed.getBreakOnFail(),
+                        "Invalid Process Date. Expected: " + expectedDate + " Actual: " + processDate);
+            }
+
+        } catch (Exception e) {
+            log.error("Error processing validation: ", e);
+        }
+    }
+
+    private DataFeedResult getDataFeedResult(Workflow workflow) {
+        return dataFeedResultRepository.findByReferenceNameId(workflow.getReferenceNameId())
+                .orElseThrow(() -> new ValidateControlException("DataFeedResult not found for workflow: " + workflow.getReferenceNameId()));
+    }
+
+    private boolean validateProcessDate(ValidationControlDataFeed validationControlDataFeed, Workflow workflow, LocalDate processDate, LocalDate expectedDate) {
+        boolean isDateMatching = expectedDate.equals(processDate);
+
+        // Fetch the ValidationControl for "ProcessDate"
+        ValidationControl validationControl = getValidationControl();
+
+        List<ValidationControlDataFeed> validationControlDataFeeds = validationControlDataFeedRepository
+                .findByValidationControl_ValidationControlId(validationControl.getValidationControlId());
+
+        return validationControlDataFeeds.stream()
+                .filter(ValidationControlDataFeed::isActive)
+                .anyMatch(dataFeed -> {
+                    String validationMetaData = dataFeed.getValidationMetaData();
+                    boolean isWithinRange = isWithinAllowedRange(processDate, validationMetaData);
+
+                    saveValidationControlDataFeedResult(workflow.getDataFeedMetaData().getDataFeedResultId(),
+                            isWithinRange && isDateMatching, expectedDate.toString(), processDate.toString(),
+                            dataFeed.getValidationControlDataFeedId());
+
+                    if (isWithinRange) {
+                        log.info(isDateMatching ? "Process date is valid and matches." : "Process date is valid but does not match.");
+                    } else {
+                        log.warn("Process date does not fall within the allowed range.");
+                    }
+                    return isWithinRange && isDateMatching;
+                });
+    }
+
+    private ValidationControl getValidationControl() {
+        return validationControlRepository.findByControlNameAndIsActiveAndStageId(
+                        "ProcessDate", true,
+                        stageRepository.getStageByCodeNameAndIsActive(Constants.STAGE2_CODE_NAME, true).getStageId())
+                .stream().findFirst().orElseThrow(() -> new ValidateControlException("ValidationControl not found"));
+    }
+
+    private LocalDate adjustDateForWeekendAndHolidays(LocalDate date) {
+        if (date.getDayOfWeek() == DayOfWeek.SATURDAY) {
+            return date.plusDays(2);
+        } else if (date.getDayOfWeek() == DayOfWeek.SUNDAY) {
+            return date.plusDays(1);
+        }
+        LocalDate adjustedDate = holidayCalendarService.getBusinessDate(date);
+        return adjustedDate != null ? adjustedDate : date;
+    }
+
+    private boolean isWithinAllowedRange(LocalDate processDate, String validationMetaData) {
+        Set<Integer> allowedDays = parseAllowedDays(validationMetaData);
+        int processDateDayOfWeek = processDate.getDayOfWeek().getValue();
+        return allowedDays.contains(processDateDayOfWeek);
+    }
+
+    private Set<Integer> parseAllowedDays(String validationMetaData) {
+        try {
+            ObjectMapper objectMapper = new ObjectMapper();
+            JsonNode rootNode = objectMapper.readTree(validationMetaData);
+            JsonNode daysOfWeekNode = rootNode.get("daysOfWeek");
+
+            if (daysOfWeekNode != null && daysOfWeekNode.isArray()) {
+                return StreamSupport.stream(daysOfWeekNode.spliterator(), false)
+                        .map(JsonNode::asInt)
+                        .collect(Collectors.toSet());
+            }
+        } catch (Exception e) {
+            log.error("Error parsing validation meta-data: ", e);
+        }
+        return Collections.emptySet();
+    }
+}
