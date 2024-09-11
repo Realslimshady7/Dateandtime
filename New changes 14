@@ -1,0 +1,131 @@
+public class ProcessDateValidatorService extends AbstractValidatorService {
+
+    private final DataFeedResultRepository dataFeedResultRepository;
+    private final ValidationControlRepository validationControlRepository;
+    private final ValidationControlDataFeedRepository validationControlDataFeedRepository;
+    private final ValidationControlDataFeedResultRepository validationControlDataFeedResultRepository;
+    private final StageRepository stageRepository;
+    private final HolidayCalendarService holidayCalendarService;
+
+    public ProcessDateValidatorService(
+        ValidationControlDataFeedResultRepository validationControlDataFeedResultRepository,
+        ValidationControlDataFeedExceptionResultRepository validationControlDataFeedExceptionResultRepository,
+        DataFeedResultRepository dataFeedResultRepository,
+        ValidationControlRepository validationControlRepository,
+        ValidationControlDataFeedRepository validationControlDataFeedRepository,
+        ValidationControlDataFeedResultRepository validationControlDataFeedResultRepository1,
+        StageRepository stageRepository,
+        HolidayCalendarService holidayCalendarService
+    ) {
+        super(validationControlDataFeedResultRepository, validationControlDataFeedExceptionResultRepository);
+        this.dataFeedResultRepository = dataFeedResultRepository;
+        this.validationControlRepository = validationControlRepository;
+        this.validationControlDataFeedRepository = validationControlDataFeedRepository;
+        this.validationControlDataFeedResultRepository = validationControlDataFeedResultRepository1;
+        this.stageRepository = stageRepository;
+        this.holidayCalendarService = holidayCalendarService;
+    }
+
+    public void validate(ValidationControlDataFeed validationControlDataFeed, Workflow workflow) {
+        try {
+            // Fetch the DataFeedResult by reference name
+            Optional<DataFeedResult> dataResultOpt = dataFeedResultRepository.findByReferenceNameId(workflow.getReferenceNameId());
+            if (!dataResultOpt.isPresent()) {
+                throw new ValidateControlException("DataFeedResult not found for workflow: " + workflow.getReferenceNameId());
+            }
+            DataFeedResult dataResult = dataResultOpt.get();
+            LocalDate processDate = dataResult.getProcessDate().toLocalDate();
+            LocalDate currentDate = LocalDate.now();
+
+            // Fetch the ValidationControl for "ProcessDate"
+            ValidationControl validationControl = validationControlRepository
+                .findByControlNameAndIsActiveAndStageId("ProcessDate", true, stageRepository.getStageByCodeNameAndIsActive(Constants.STAGE2_CODE_NAME, true).getStageId())
+                .stream().findFirst().orElse(new ValidationControl());
+
+            // Fetch the list of ValidationControlDataFeeds
+            List<ValidationControlDataFeed> validationControlDataFeeds = validationControlDataFeedRepository.findByValidationControl_ValidationControlId(validationControl.getValidationControlId());
+            boolean isProcessDateValid = validationControlDataFeeds.stream()
+                .filter(ValidationControlDataFeed::isActive)
+                .anyMatch(dataFeed -> {
+                    String validationMetaData = dataFeed.getValidationMetaData();
+
+                    // Check if the process date is within the allowed range (ignoring weekends if needed)
+                    boolean isWithinRange = isWithinAllowedRange(processDate, validationMetaData);
+                    if (isWithinRange) {
+                        // If metadata includes weekend days, skip the weekend adjustment
+                        if (shouldIgnoreWeekendAdjustment(validationMetaData)) {
+                            // Check holiday calendar only
+                            LocalDate expectedDate = holidayCalendarService.getBusinessDate(currentDate);
+                            boolean isDateMatching = expectedDate.equals(processDate);
+
+                            if (isDateMatching) {
+                                saveValidationControlDataFeedResult(workflow.getDataFeedMetaData().getDataFeedResultId(), true, expectedDate.toString(), processDate.toString(), dataFeed.getValidationControlDataFeedId());
+                                log.info("Process date is within the allowed range and matches the expected date based on the holiday calendar.");
+                                return true;
+                            } else {
+                                handleValidationFailure(workflow, validationControlDataFeed, expectedDate, processDate, dataFeed);
+                                return false;
+                            }
+                        }
+                    }
+                    log.warn("Process date does not fall within the allowed range.");
+                    return false;
+                });
+
+        } catch (Exception e) {
+            log.error("Error processing validation: ", e);
+        }
+    }
+
+    private boolean shouldIgnoreWeekendAdjustment(String validationMetaData) {
+        // Parse metadata and check if both Saturday (6) and Sunday (7) are allowed in the range
+        Set<Integer> allowedDays = parseAllowedDays(validationMetaData);
+        return allowedDays.contains(6) && allowedDays.contains(7); // Ignore weekend adjustment if Saturday and Sunday are allowed
+    }
+
+    private LocalDate adjustDateForWeekendAndHolidays(LocalDate date, boolean ignoreWeekendAdjustment) {
+        // If we should ignore weekend adjustment, only check the holiday calendar
+        if (ignoreWeekendAdjustment) {
+            return holidayCalendarService.getBusinessDate(date) != null ? holidayCalendarService.getBusinessDate(date) : date;
+        }
+
+        // Otherwise, adjust for weekends
+        if (date.getDayOfWeek() == DayOfWeek.SATURDAY) {
+            return date.plusDays(2); // Move to Monday
+        } else if (date.getDayOfWeek() == DayOfWeek.SUNDAY) {
+            return date.plusDays(1); // Move to Monday
+        }
+
+        // Check for holidays
+        return holidayCalendarService.getBusinessDate(date) != null ? holidayCalendarService.getBusinessDate(date) : date;
+    }
+
+    private void handleValidationFailure(Workflow workflow, ValidationControlDataFeed validationControlDataFeed, LocalDate expectedDate, LocalDate processDate, ValidationControlDataFeed dataFeed) {
+        ValidationControlDataFeedResult validationControlDataFeedResult = saveValidationControlDataFeedResult(workflow.getDataFeedMetaData().getDataFeedResultId(), false, expectedDate.toString(), processDate.toString(), dataFeed.getValidationControlDataFeedId());
+        log.info("Process Date mismatch. Validation failed. Expected: {} Actual: {}", expectedDate.toString(), processDate.toString());
+        terminateWorkflow(validationControlDataFeed.getBreakOnFail(), "Invalid Process Date. Expected: " + expectedDate.toString() + " Actual: " + processDate.toString(), validationControlDataFeedResult);
+        log.warn("Process date does not match the expected date.");
+    }
+
+    private boolean isWithinAllowedRange(LocalDate processDate, String validationMetaData) {
+        Set<Integer> allowedDays = parseAllowedDays(validationMetaData);
+        int processDateDayOfWeek = processDate.getDayOfWeek().getValue();
+        return allowedDays.contains(processDateDayOfWeek);
+    }
+
+    private Set<Integer> parseAllowedDays(String validationMetaData) {
+        try {
+            ObjectMapper objectMapper = new ObjectMapper();
+            JsonNode rootNode = objectMapper.readTree(validationMetaData);
+            JsonNode daysOfWeekNode = rootNode.get("daysOfWeek");
+            if (daysOfWeekNode != null && daysOfWeekNode.isArray()) {
+                return StreamSupport.stream(daysOfWeekNode.spliterator(), false)
+                    .map(JsonNode::asInt)
+                    .collect(Collectors.toSet());
+            }
+        } catch (Exception e) {
+            log.error("Error parsing validation meta-data: ", e);
+        }
+        return Collections.emptySet();
+    }
+}
