@@ -1,0 +1,97 @@
+@Test
+public void testValidate_ProcessDateMatches_ShouldPassValidation() {
+    // Arrange
+    LocalDate staticDate = LocalDate.of(2024, 9, 7); // Static date for testing
+    LocalDate processDate = LocalDate.of(2024, 9, 7); // Process date matches expected
+
+    // Mock DataFeedResult
+    DataFeedResult mockDataFeedResult = mock(DataFeedResult.class);
+    when(mockDataFeedResult.getProcessDate()).thenReturn(processDate.atStartOfDay());
+    when(mockDataFeedResultRepository.findByReferenceNameId(anyString()))
+        .thenReturn(Optional.of(mockDataFeedResult));
+
+    // Mock StageRepository to return a valid Stage object
+    Stage mockStage = mock(Stage.class);
+    when(mockStage.getStageId()).thenReturn(1L); // Mocking a valid Stage ID
+    when(mockStageRepository.getStageByCodeNameAndIsActive(anyString(), anyBoolean()))
+        .thenReturn(mockStage);
+
+    // Mock ValidationControlRepository to return an active control
+    ValidationControl mockValidationControl = mock(ValidationControl.class);
+    when(mockValidationControlRepository.findByControlNameAndIsActiveAndStageId(anyString(), anyBoolean(), anyLong()))
+        .thenReturn(Optional.of(mockValidationControl));
+
+    // Create the ProcessDateValidatorService with the static date
+    ProcessDateValidatorService validatorService = new ProcessDateValidatorService(
+        mockValidationControlDataFeedResultRepository,
+        mockValidationControlDataFeedExceptionResultRepository,
+        mockDataFeedResultRepository,
+        mockValidationControlRepository,
+        mockValidationControlDataFeedRepository,
+        mockValidationControlDataFeedResultRepository,
+        mockStageRepository,
+        mockHolidayCalendarService,
+        staticDate // Inject the static date here
+    );
+
+    // Act & Assert
+    validatorService.validate(mockValidationControlDataFeed, mockWorkflow); // Should pass validation
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+@Test
+public void testValidate_ProcessDateDoesNotMatch_ShouldFailValidation() {
+    // Arrange
+    LocalDate staticDate = LocalDate.of(2024, 9, 7); // Static date for testing
+    LocalDate processDate = LocalDate.of(2024, 9, 14); // Process date does not match expected
+
+    // Mock DataFeedResult
+    DataFeedResult mockDataFeedResult = mock(DataFeedResult.class);
+    when(mockDataFeedResult.getProcessDate()).thenReturn(processDate.atStartOfDay());
+    when(mockDataFeedResultRepository.findByReferenceNameId(anyString()))
+        .thenReturn(Optional.of(mockDataFeedResult));
+
+    // Mock StageRepository to return a valid Stage object
+    Stage mockStage = mock(Stage.class);
+    when(mockStage.getStageId()).thenReturn(1L); // Mocking a valid Stage ID
+    when(mockStageRepository.getStageByCodeNameAndIsActive(anyString(), anyBoolean()))
+        .thenReturn(mockStage);
+
+    // Mock ValidationControlRepository to return an active control
+    ValidationControl mockValidationControl = mock(ValidationControl.class);
+    when(mockValidationControlRepository.findByControlNameAndIsActiveAndStageId(anyString(), anyBoolean(), anyLong()))
+        .thenReturn(Optional.of(mockValidationControl));
+
+    // Create the ProcessDateValidatorService with the static date
+    ProcessDateValidatorService validatorService = new ProcessDateValidatorService(
+        mockValidationControlDataFeedResultRepository,
+        mockValidationControlDataFeedExceptionResultRepository,
+        mockDataFeedResultRepository,
+        mockValidationControlRepository,
+        mockValidationControlDataFeedRepository,
+        mockValidationControlDataFeedResultRepository,
+        mockStageRepository,
+        mockHolidayCalendarService,
+        staticDate // Inject the static date here
+    );
+
+    // Act & Assert
+    assertThatThrownBy(() -> validatorService.validate(mockValidationControlDataFeed, mockWorkflow))
+        .isInstanceOf(ValidateControlException.class)
+        .hasMessageContaining("Invalid Process Date");
+}
