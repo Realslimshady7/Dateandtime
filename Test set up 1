@@ -1,0 +1,36 @@
+@BeforeEach
+public void setup() {
+    // Mock repositories
+    mockDataFeedResultRepository = mock(DataFeedResultRepository.class);
+    mockValidationControlRepository = mock(ValidationControlRepository.class);
+    mockStageRepository = mock(StageRepository.class);
+    mockValidationControlDataFeedRepository = mock(ValidationControlDataFeedRepository.class);
+    mockHolidayCalendarService = mock(HolidayCalendarService.class);
+    
+    // Mock DataFeedResult
+    DataFeedResult mockDataFeedResult = mock(DataFeedResult.class);
+    when(mockDataFeedResult.getProcessDate()).thenReturn(LocalDate.of(2024, 9, 7).atStartOfDay());
+    when(mockDataFeedResultRepository.findByReferenceNameId(anyString())).thenReturn(Optional.of(mockDataFeedResult));
+    
+    // Mock StageRepository to return valid stage
+    Stage mockStage = mock(Stage.class);
+    when(mockStage.getStageId()).thenReturn(1L);
+    when(mockStageRepository.getStageByCodeNameAndIsActive(anyString(), anyBoolean())).thenReturn(Optional.of(mockStage));
+    
+    // Mock ValidationControlRepository
+    ValidationControl mockValidationControl = mock(ValidationControl.class);
+    when(mockValidationControlRepository.findByControlNameAndIsActiveAndStageId(anyString(), anyBoolean(), anyLong()))
+        .thenReturn(Optional.of(mockValidationControl));
+    
+    // Create validator service
+    processDateValidatorService = new ProcessDateValidatorService(
+        mockValidationControlDataFeedResultRepository,
+        mockValidationControlDataFeedExceptionResultRepository,
+        mockDataFeedResultRepository,
+        mockValidationControlRepository,
+        mockValidationControlDataFeedRepository,
+        mockValidationControlDataFeedResultRepository,
+        mockStageRepository,
+        mockHolidayCalendarService
+    );
+}
