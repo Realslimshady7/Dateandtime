@@ -1,0 +1,23 @@
+<div style="margin: 20px;">
+  <mat-form-field appearance="fill">
+    <mat-label>Select Option</mat-label>
+    <mat-select (selectionChange)="onSelect($event)">
+      <mat-option *ngFor="let option of options" [value]="option">{{option}}</mat-option>
+    </mat-select>
+  </mat-form-field>
+
+  <div *ngIf="showSearchBox">
+    <mat-form-field appearance="fill">
+      <mat-label>Search</mat-label>
+      <input matInput [(ngModel)]="searchTerm" placeholder="Search...">
+    </mat-form-field>
+    <button mat-raised-button color="primary" (click)="onSearch()">Search</button>
+  </div>
+
+  <div *ngIf="searchResults.length > 0">
+    <h3>Search Results:</h3>
+    <ul>
+      <li *ngFor="let result of searchResults">{{result}}</li>
+    </ul>
+  </div>
+</div>
