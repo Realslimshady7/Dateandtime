@@ -1,0 +1,141 @@
+import static org.mockito.Mockito.*;
+import static org.assertj.core.api.Assertions.*;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
+import java.time.LocalDate;
+import java.util.Optional;
+import java.util.Collections;
+import java.util.List;
+
+class ProcessDateValidatorServiceTest {
+
+    @Mock
+    private DataFeedResultRepository dataFeedResultRepository;
+
+    @Mock
+    private ValidationControlRepository validationControlRepository;
+
+    @Mock
+    private ValidationControlDataFeedRepository validationControlDataFeedRepository;
+
+    @Mock
+    private ValidationControlDataFeedResultRepository validationControlDataFeedResultRepository;
+
+    @Mock
+    private StageRepository stageRepository;
+
+    @Mock
+    private HolidayCalendarService holidayCalendarService;
+
+    @InjectMocks
+    private ProcessDateValidatorService processDateValidatorService;
+
+    private Workflow mockWorkflow;
+    private DataFeedResult mockDataFeedResult;
+    private ValidationControlDataFeed mockValidationControlDataFeed;
+
+    @BeforeEach
+    void setUp() {
+        MockitoAnnotations.openMocks(this);
+        mockWorkflow = new Workflow();
+        mockWorkflow.setReferenceNameId(123L);
+
+        mockDataFeedResult = new DataFeedResult();
+        mockDataFeedResult.setProcessDate(LocalDate.now().atStartOfDay());
+
+        mockValidationControlDataFeed = new ValidationControlDataFeed();
+    }
+
+    @Test
+    void testValidate_DataFeedResultNotFound_ShouldThrowException() {
+        when(dataFeedResultRepository.findByReferenceNameId(mockWorkflow.getReferenceNameId()))
+            .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> processDateValidatorService.validate(mockValidationControlDataFeed, mockWorkflow))
+            .isInstanceOf(ValidateControlException.class)
+            .hasMessageContaining("DataFeedResult not found for workflow");
+
+        verify(dataFeedResultRepository, times(1)).findByReferenceNameId(anyLong());
+    }
+
+    @Test
+    void testValidate_ProcessDateMatches_ShouldPassValidation() {
+        when(dataFeedResultRepository.findByReferenceNameId(mockWorkflow.getReferenceNameId()))
+            .thenReturn(Optional.of(mockDataFeedResult));
+        when(holidayCalendarService.getBusinessDate(any(LocalDate.class)))
+            .thenReturn(null); // No holiday adjustment
+
+        ValidationControl validationControl = new ValidationControl();
+        when(validationControlRepository.findByControlNameAndIsActiveAndStageId(anyString(), anyBoolean(), anyLong()))
+            .thenReturn(Optional.of(validationControl));
+        when(validationControlDataFeedRepository.findByValidationControl_ValidationControlId(anyLong()))
+            .thenReturn(List.of(mockValidationControlDataFeed));
+
+        mockValidationControlDataFeed.setValidationMetaData("{\"daysOfWeek\": [1, 2, 3, 4, 5]}"); // Mon-Fri
+
+        processDateValidatorService.validate(mockValidationControlDataFeed, mockWorkflow);
+
+        verify(dataFeedResultRepository, times(1)).findByReferenceNameId(anyLong());
+        verify(validationControlDataFeedRepository, times(1)).findByValidationControl_ValidationControlId(anyLong());
+    }
+
+    @Test
+    void testValidate_ProcessDateDoesNotMatch_ShouldFailValidation() {
+        // Set a different process date to induce mismatch
+        mockDataFeedResult.setProcessDate(LocalDate.now().minusDays(1).atStartOfDay());
+
+        when(dataFeedResultRepository.findByReferenceNameId(mockWorkflow.getReferenceNameId()))
+            .thenReturn(Optional.of(mockDataFeedResult));
+        when(holidayCalendarService.getBusinessDate(any(LocalDate.class)))
+            .thenReturn(null); // No holiday adjustment
+
+        ValidationControl validationControl = new ValidationControl();
+        when(validationControlRepository.findByControlNameAndIsActiveAndStageId(anyString(), anyBoolean(), anyLong()))
+            .thenReturn(Optional.of(validationControl));
+        when(validationControlDataFeedRepository.findByValidationControl_ValidationControlId(anyLong()))
+            .thenReturn(List.of(mockValidationControlDataFeed));
+
+        mockValidationControlDataFeed.setValidationMetaData("{\"daysOfWeek\": [1, 2, 3, 4, 5]}"); // Mon-Fri
+
+        assertThatThrownBy(() -> processDateValidatorService.validate(mockValidationControlDataFeed, mockWorkflow))
+            .isInstanceOf(ValidateControlException.class)
+            .hasMessageContaining("Invalid Process Date");
+
+        verify(dataFeedResultRepository, times(1)).findByReferenceNameId(anyLong());
+        verify(validationControlDataFeedRepository, times(1)).findByValidationControl_ValidationControlId(anyLong());
+    }
+
+    @Test
+    void testAdjustDateForWeekendAndHolidays() {
+        LocalDate saturday = LocalDate.of(2024, 9, 7); // Assume it's a Saturday
+        when(holidayCalendarService.getBusinessDate(any(LocalDate.class)))
+            .thenReturn(null);
+
+        LocalDate adjustedDate = processDateValidatorService.adjustDateForWeekendAndHolidays(saturday);
+
+        assertThat(adjustedDate).isEqualTo(saturday.plusDays(2)); // Adjust to Monday
+    }
+
+    @Test
+    void testIsWithinAllowedRange_ShouldReturnTrueForAllowedDay() {
+        String validationMetaData = "{\"daysOfWeek\": [1, 2, 3, 4, 5]}"; // Mon-Fri
+        LocalDate tuesday = LocalDate.of(2024, 9, 10); // A Tuesday
+
+        boolean result = processDateValidatorService.isWithinAllowedRange(tuesday, validationMetaData);
+
+        assertThat(result).isTrue(); // Tuesday is within the allowed range
+    }
+
+    @Test
+    void testIsWithinAllowedRange_ShouldReturnFalseForDisallowedDay() {
+        String validationMetaData = "{\"daysOfWeek\": [1, 2, 3, 4, 5]}"; // Mon-Fri
+        LocalDate sunday = LocalDate.of(2024, 9, 8); // A Sunday
+
+        boolean result = processDateValidatorService.isWithinAllowedRange(sunday, validationMetaData);
+
+        assertThat(result).isFalse(); // Sunday is not within the allowed range
+    }
+}
