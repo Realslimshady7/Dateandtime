@@ -1,0 +1,20 @@
+InputStream inputStream = getClass().getClassLoader().getResourceAsStream(CONFIG_FILE_PATH);
+        
+        Path outputPath;
+        if (inputStream == null) {
+            // File doesn't exist, create it
+            outputPath = Paths.get("src/main/resources/" + CONFIG_FILE_PATH);
+        } else {
+            // File exists, overwrite
+            outputPath = Paths.get("src/main/resources/" + CONFIG_FILE_PATH);
+        }
+
+        // Ensure directories exist
+        Files.createDirectories(outputPath.getParent());
+
+        // Write or overwrite the file
+        try (FileWriter writer = new FileWriter(outputPath.toFile(), false)) {
+            writer.write(content);
+        }
+
+        return outputPath.toAbsolutePath().toString();
