@@ -1,0 +1,10 @@
+// Check if the file exists, create if not
+        if (!Files.exists(configFilePath)) {
+            Files.createFile(configFilePath);
+            LOGGER.info("Created new client.jaas.conf file at: {}", configFilePath.toAbsolutePath());
+        }
+
+try (BufferedWriter writer = Files.newBufferedWriter(configFilePath, StandardOpenOption.TRUNCATE_EXISTING)) {
+            writer.write(newContent);
+            LOGGER.info("Overwritten the content of client.jaas.conf file.");
+        }
