@@ -1,0 +1,57 @@
+String keytab;
+        String principal;
+
+        if ("PROD".equals(environment)) {
+            keytab = getFileLocation("rdigsapsvc.keytab", RDI_PROD_KEYTAB);
+            principal = "rdigsapsvc";
+        } else {
+            keytab = getFileLocation("rdigsapsvcnonprod.keytab", RDI_PROD_KEYTAB);
+            principal = "rdigsapsvcnonprod";
+        }
+
+        // Load the client.jaas.conf file from resources
+        Path jaasPath = loadFileFromResources(RDI_PROD_KEYTAB);
+
+        // Read the client.jaas.conf file
+        String jaasContent = new String(Files.readAllBytes(jaasPath), StandardCharsets.UTF_8);
+
+        // Replace keyTab and principal values
+        String newKeyTabValue = "keyTab=\"" + keytab + "\"";
+        jaasContent = jaasContent.replaceAll("keyTab=\"[^\"]*\"", newKeyTabValue);
+
+        String newPrincipalValue = "principal=\"" + principal + "\"";
+        jaasContent = jaasContent.replaceAll("principal=\"[^\"]*\"", newPrincipalValue);
+
+        // Write the updated content back to a temporary file
+        Path tempJaasFile = Files.createTempFile("client", ".jaas.conf");
+        Files.write(tempJaasFile, jaasContent.getBytes(StandardCharsets.UTF_8));
+
+        // Output the new file location
+        System.out.println("Modified JAAS config saved at: " + tempJaasFile.toAbsolutePath());
+    }
+
+    // Method to load a file from src/main/resources
+    private static Path loadFileFromResources(String fileName) throws IOException {
+        ClassPathResource resource = new ClassPathResource(fileName);
+        InputStream resourceStream = resource.getInputStream();
+
+        // Copy resource content to a temporary file to manipulate
+        Path tempFile = Files.createTempFile(fileName, null);
+        Files.copy(resourceStream, tempFile, StandardCopyOption.REPLACE_EXISTING);
+
+        return tempFile;
+    }
+
+    // Method to get the file location (for keyTab example)
+    public static String getFileLocation(String filepath, String filename) throws IOException {
+        // Load from resources
+        InputStream stream = FileResourceUtils.class.getClassLoader().getResourceAsStream(filepath);
+        if (stream == null) {
+            throw new FileNotFoundException("File not found in resources: " + filepath);
+        }
+
+        Path tempFile = Files.createTempFile(filename, null);
+        Files.copy(stream, tempFile, StandardCopyOption.REPLACE_EXISTING);
+
+        return tempFile.toAbsolutePath().toString().replace("\\", "/");
+    }
