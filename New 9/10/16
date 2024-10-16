@@ -1,0 +1,123 @@
+public void generateAlertsFromProcessor(Map<Integer, String> alertProcessorMap) {
+    CompletableFuture.runAsync(() -> {
+        String instanceID = System.getenv().get("CF_INSTANCE_GUID");
+        LOGGER.info("Instance Name : {}", instanceID);
+
+        if (isBatchRunning(instanceID)) {
+            LOGGER.info("Already Batch is running on this VM. So not accepting new Batch on Instance {}", instanceID);
+            return;
+        }
+
+        updateInQueueStatus(alertProcessorMap, instanceID, false);
+
+        for (Map.Entry<Integer, String> entry : alertProcessorMap.entrySet()) {
+            Integer alertProcessId = entry.getKey();
+            String alertIds = entry.getValue();
+
+            if (alertIds == null || alertIds.isEmpty()) {
+                return;
+            }
+
+            try (Session session = sessionFactory.getObject().openSession()) {
+                List<Long> alertIDList = Stream.of(alertIds.split(GsapComputationConstants.SPLIT_BY_COMMA))
+                        .map(Long::parseLong)
+                        .collect(Collectors.toList());
+                
+                List<GsapAlerts> gsapAlertsList = session.createQuery(QueryConstants.GET_ACTIVE_ALERTS_BY_ID)
+                        .setParameterList("alertIDList", alertIDList)
+                        .getResultList();
+
+                if (isNullOrEmpty(gsapAlertsList)) {
+                    LOGGER.info("No Active Alerts when running from processor.");
+                    updateAlertDefProcessorJobStatus(alertProcessId, "COMPLETED INACTIVE", "D", false);
+                    return;
+                }
+
+                Map<String, List<GsapSecurityDto>> isinSecurityListMap = null;
+
+                // Update job status to IN PROGRESS
+                updateAlertDefProcessorJobStatus(alertProcessId, "IN PROGRESS", null, false);
+
+                // Process each alert
+                for (GsapAlerts gsapAlert : gsapAlertsList) {
+                    processRuleAlert(gsapAlert, isinSecurityListMap);
+                }
+
+                // Update job status to COMPLETED
+                updateAlertDefProcessorJobStatus(alertProcessId, "COMPLETED", "D", false);
+            } catch (SpecificException e) { // Catch specific exceptions instead of system exceptions
+                LOGGER.error("Exception in generating alerts when running from processor. {}", e.getMessage());
+                if (alertProcessId != null) {
+                    updateAlertDefProcessorJobStatus(alertProcessId, "RECEIVED", "N", false);
+                }
+            } catch (Exception e) {
+                LOGGER.error("Unexpected error occurred: {}", e.getMessage());
+            }
+        }
+    }).exceptionally(ex -> null);
+}
+
+
+
+
+private void aggregateReportForLE(GsapRules gsapRule, String adhocRequestKey, GsapAlerts gsapAlert,
+                                    Map<Long, List<GsapPositionDto>> legalEntityPositionForNonOptionsMap,
+                                    Map<Long, List<GsapPositionDto>> legalEntityPositionForOptionsMap,
+                                    Map<String, Double> aggregatedIsinNumeratorMap,
+                                    Map<String, Double> aggregatedIsinShareQtyNumeratorMap,
+                                    boolean isShortScenario,
+                                    Map<String, GsapSecurityDto> isinSecurityMap,
+                                    Set<String> isinSet,
+                                    Map<String, List<String>> fundIsinMap) {
+    
+    if (legalEntityPositionForOptionsMap.isEmpty() || legalEntityPositionForNonOptionsMap.isEmpty()) {
+        return;
+    }
+
+    Set<Long> legalIdSet = new HashSet<>();
+    legalIdSet.addAll(legalEntityPositionForOptionsMap.keySet());
+    legalIdSet.addAll(legalEntityPositionForNonOptionsMap.keySet());
+
+    for (Long id : legalIdSet) {
+        Map<String, List<GsapPositionDto>> isinPositionDataForOptionsMapLegalEntity = new HashMap<>();
+        Map<String, List<GsapPositionDto>> isinPositionDataForNonOptionsMapLegalEntity = new HashMap<>();
+        Map<String, Map<String, Double>> isinNumeratorMapForOptionsLegalEntity = new HashMap<>();
+        Map<String, Map<String, Double>> isinNumeratorMapForNonOptionsLegalEntity = new HashMap<>();
+
+        List<GsapPositionDto> optionsPositionList = legalEntityPositionForOptionsMap.get(id);
+        List<GsapPositionDto> nonOptionsPositionList = legalEntityPositionForNonOptionsMap.get(id);
+
+        if (optionsPositionList != null) {
+            isinPositionDataForOptionsMapLegalEntity = optionsPositionList.stream()
+                    .collect(Collectors.groupingBy(GsapPositionDto::getUnderlyingCommonStockIsin));
+            isinNumeratorMapForOptionsLegalEntity = numeratorCalculationForOptions(isinPositionDataForOptionsMapLegalEntity, gsapRule);
+        }
+
+        if (nonOptionsPositionList != null) {
+            isinPositionDataForNonOptionsMapLegalEntity = nonOptionsPositionList.stream()
+                    .collect(Collectors.groupingBy(GsapPositionDto::getUnderlyingCommonStockIsin));
+            isinNumeratorMapForNonOptionsLegalEntity = numeratorCalculationForNonOptions(isinPositionDataForNonOptionsMapLegalEntity, gsapRule);
+        }
+
+        alertGenerationBasedOnThreshold(isinPositionDataForNonOptionsMapLegalEntity,
+                                         isinPositionDataForOptionsMapLegalEntity,
+                                         isinNumeratorMapForNonOptionsLegalEntity,
+                                         isinNumeratorMapForOptionsLegalEntity,
+                                         isinSecurityMap,
+                                         gsapAlert,
+                                         gsapRule,
+                                         id,
+                                         isShortScenario,
+                                         true,
+                                         adhocRequestKey,
+                                         aggregatedIsinNumeratorMap,
+                                         false,
+                                         isinSet,
+                                         fundIsinMap,
+                                         aggregatedIsinShareQtyNumeratorMap);
+    }
+
+    legalIdSet.clear();
+    legalEntityPositionForOptionsMap.clear();
+    legalEntityPositionForNonOptionsMap.clear();
+}
